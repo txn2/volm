@@ -12,13 +12,10 @@ import (
 
 // Config configures the API
 type Config struct {
-	Service              string
-	Version              string
-	VolumeOveragePercent int
-	AvgMPS               int
-	MCImage              string
-	Log                  *zap.Logger
-	Cs                   *kubernetes.Clientset
+	Service string
+	Version string
+	Log     *zap.Logger
+	Cs      *kubernetes.Clientset
 }
 
 // API is primary object implementing the core API methods
