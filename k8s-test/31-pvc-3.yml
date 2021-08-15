@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: volm-test-pvc-3
+  namespace: volm-test
+  annotations:
+    test: "1234"
+  labels:
+    pvci.txn2.com/service: pvci
+    this.is-a.test: "1234"
+spec:
+  dataSource:
+    kind: PersistentVolumeClaim
+    name: volm-test-pvc-2
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: "1Gi"
+  storageClassName: rook-ceph-block

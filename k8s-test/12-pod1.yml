@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pvc1-attached-pod
+  namespace: volm-test
+spec:
+  containers:
+    - name: mc
+      image: minio/mc:RELEASE.2021-05-18T03-39-44Z
+      command:
+        - "/usr/bin/tail"
+      args:
+        - "-f"
+        - "/dev/null"
+      volumeMounts:
+        - mountPath: /data/volm-test-pvc-1
+          name: volm-test-pvc-1
+  volumes:
+    - name: volm-test-pvc-1
+      persistentVolumeClaim:
+        claimName: volm-test-pvc-1
