@@ -33,6 +33,8 @@ var (
 	modeEnv             = getEnv("MODE", "release")
 	httpReadTimeoutEnv  = getEnv("HTTP_READ_TIMEOUT", "10")
 	httpWriteTimeoutEnv = getEnv("HTTP_WRITE_TIMEOUT", "1200")
+	pvcNamespaceEnv     = getEnv("PVC_NAMESPACE", "default")
+	pvcSelectorEnv      = getEnv("PVC_SELECTOR", "")
 )
 
 var Version = "0.0.0"
@@ -58,6 +60,8 @@ func main() {
 		mode             = flag.String("mode", modeEnv, "debug or release")
 		httpReadTimeout  = flag.Int("httpReadTimeout", httpReadTimeoutInt, "HTTP read timeout")
 		httpWriteTimeout = flag.Int("httpWriteTimeout", httpWriteTimeoutInt, "HTTP write timeout")
+		pvcNamespace     = flag.String("pvcNamespace", pvcNamespaceEnv, "PVC Namespace")
+		pvcSelector      = flag.String("pvcSelector", pvcSelectorEnv, "PVC Selector")
 	)
 	flag.Parse()
 
@@ -108,10 +112,12 @@ func main() {
 
 	// get api
 	api, err := volm.NewApi(&volm.Config{
-		Service: Service,
-		Version: Version,
-		Log:     logger,
-		Cs:      cs,
+		Service:      Service,
+		Version:      Version,
+		Log:          logger,
+		Cs:           cs,
+		PVCNamespace: *pvcNamespace,
+		PVCSelector:  *pvcSelector,
 	})
 	if err != nil {
 		logger.Fatal("Error getting API.", zap.Error(err))
@@ -144,6 +150,15 @@ func main() {
 
 	// status
 	r.GET("/", api.OkHandler(Version, *mode, Service))
+
+	// list PVCs
+	r.GET("vol/", api.ListPVCHandler())
+
+	// get PVC
+	r.GET("vol/:name", api.GetPVCHandler())
+
+	// delete PVC
+	r.DELETE("vol/:name", api.DeletePVCHandler())
 
 	// metrics server (run in go routine)
 	go func() {
