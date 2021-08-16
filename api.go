@@ -51,8 +51,10 @@ type Config struct {
 // and HTTP handlers
 type API struct {
 	*Config
-	PVCSelectorMap map[string]string
 	LogErrors      prometheus.Counter
+	PVCSelectorMap map[string]string
+	PodStore       *PodStore
+	PVCStore       *PVCStore
 }
 
 // NewApi constructs an API object and populates it with
@@ -72,7 +74,6 @@ func NewApi(cfg *Config) (*API, error) {
 	}
 
 	a.PVCSelectorMap = map[string]string{}
-
 	if a.PVCSelector != "" {
 		kvs := strings.Split(a.PVCSelector, ",")
 		for _, kv := range kvs {
@@ -86,14 +87,36 @@ func NewApi(cfg *Config) (*API, error) {
 		}
 	}
 
+	podStore, err := NewPodStore(&PodStoreConfig{
+		Namespace: a.PVCNamespace,
+		Log:       a.Log,
+		Cs:        a.Cs,
+	})
+	if err != nil {
+		return a, err
+	}
+
+	a.PodStore = podStore
+
+	pvcStore, err := NewPVCStore(&PVCStoreConfig{
+		Namespace: a.PVCNamespace,
+		Log:       a.Log,
+		Cs:        a.Cs,
+	})
+	if err != nil {
+		return a, err
+	}
+
+	a.PVCStore = pvcStore
+
 	return a, nil
 }
 
-// isNotFound returns true if the error is a errors.StatusError
+// IsNotFound returns true if the error is a errors.StatusError
 // matching metaV1.StatusReasonNotFound this function allows us
 // to log more critical errors and pass status information such
 // at 404s and 500s through the REST API.
-func (a *API) isNotFound(err error) bool {
+func IsNotFound(err error) bool {
 	if statusError, isStatus := err.(*errors.StatusError); isStatus && statusError.Status().Reason == metaV1.StatusReasonNotFound {
 		return true
 	}
@@ -124,29 +147,10 @@ func (a *API) ListPVCHandler() gin.HandlerFunc {
 func (a *API) GetPVCList() ([]VolumeInfo, error) {
 	vols := make([]VolumeInfo, 0)
 
-	ctx := context.Background()
-
-	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(a.PVCNamespace)
-
-	lo := metaV1.ListOptions{}
-
-	if a.PVCSelector != "" {
-		lo.LabelSelector = a.PVCSelector
-	}
-
-	pvcList, err := pvcClient.List(ctx, lo)
-	if err != nil {
-		a.Log.Error("GetPVCList got error invoking pvcClient.List", zap.Error(err))
-		return vols, err
-	}
-
 	// get all pods
-	pods, err := a.GetPods()
-	if err != nil {
-		return vols, err
-	}
+	pods := a.PodStore.GetPods()
 
-	for _, pvc := range pvcList.Items {
+	for _, pvc := range a.PVCStore.GetPVCs() {
 		var terminating bool
 		var terminatingSince *metaV1.Time
 
@@ -179,7 +183,7 @@ func (a *API) GetPVCList() ([]VolumeInfo, error) {
 func (a *API) GetPVCHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		pvc, err := a.GetPVC(c.Param("name"))
-		if a.isNotFound(err) {
+		if err != nil && err.Error() == "not found" {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
@@ -195,17 +199,9 @@ func (a *API) GetPVCHandler() gin.HandlerFunc {
 func (a *API) GetPVC(name string) (VolumeInfo, error) {
 	volInfo := VolumeInfo{}
 
-	ctx := context.Background()
-
-	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(a.PVCNamespace)
-
-	pvc, err := pvcClient.Get(ctx, name, metaV1.GetOptions{})
-	if a.isNotFound(err) {
-		return volInfo, err
-	}
-	if err != nil {
-		a.Log.Error("GetPVC got error invoking pvcClient.Get", zap.Error(err))
-		return volInfo, err
+	pvc := a.PVCStore.GetPVC(name)
+	if pvc == nil {
+		return volInfo, fmt.Errorf("not found")
 	}
 
 	// ensure PVC meets selector criteria
@@ -232,11 +228,7 @@ func (a *API) GetPVC(name string) (VolumeInfo, error) {
 		volInfo.TerminatingSince = pvc.DeletionTimestamp
 	}
 
-	pods, err := a.GetPods()
-	if err != nil {
-		return VolumeInfo{}, err
-	}
-
+	pods := a.PodStore.GetPods()
 	podList, err := a.GetPodsInfoByPVC(pods, pvc.Name)
 	if err != nil {
 		return VolumeInfo{}, err
@@ -250,7 +242,7 @@ func (a *API) GetPVC(name string) (VolumeInfo, error) {
 func (a *API) DeletePVCHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		err := a.DeletePVC(c.Param("name"))
-		if a.isNotFound(err) {
+		if IsNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
@@ -269,7 +261,7 @@ func (a *API) DeletePVC(name string) error {
 	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(a.PVCNamespace)
 
 	pvc, err := pvcClient.Get(ctx, name, metaV1.GetOptions{})
-	if a.isNotFound(err) {
+	if IsNotFound(err) {
 		return err
 	}
 	if err != nil {
@@ -297,10 +289,10 @@ func (a *API) DeletePVC(name string) error {
 	return nil
 }
 
-func (a *API) GetPodsInfoByPVC(podList *v1.PodList, pvcName string) ([]PodInfo, error) {
+func (a *API) GetPodsInfoByPVC(pods []v1.Pod, pvcName string) ([]PodInfo, error) {
 	var podInfoList []PodInfo
 
-	for _, pod := range podList.Items {
+	for _, pod := range pods {
 		for _, v := range pod.Spec.Volumes {
 			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == pvcName {
 				var terminating bool
@@ -325,19 +317,4 @@ func (a *API) GetPodsInfoByPVC(podList *v1.PodList, pvcName string) ([]PodInfo, 
 	}
 
 	return podInfoList, nil
-}
-
-func (a *API) GetPods() (*v1.PodList, error) {
-	var podList *v1.PodList
-	ctx := context.Background()
-
-	podClient := a.Cs.CoreV1().Pods(a.PVCNamespace)
-
-	podList, err := podClient.List(ctx, metaV1.ListOptions{})
-	if err != nil {
-		a.Log.Error("GetPods got error invoking podClient.List", zap.Error(err))
-		return podList, err
-	}
-
-	return podList, nil
 }
