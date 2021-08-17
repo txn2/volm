@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: volm
+  namespace: volm-test
+  labels:
+    app: volm
+    component: api
+spec:
+  selector:
+    app: volm
+  ports:
+    - name: http-int
+      protocol: "TCP"
+      port: 8070
+      targetPort: http-int
+  type: ClusterIP
