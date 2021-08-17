@@ -154,6 +154,23 @@ func (a *API) GetPVCList() ([]VolumeInfo, error) {
 		var terminating bool
 		var terminatingSince *metaV1.Time
 
+		selectorPass := true
+
+		// ensure PVC meets selector criteria
+		for k, v := range a.PVCSelectorMap {
+			if _, ok := pvc.Labels[k]; !ok {
+				selectorPass = false
+			}
+
+			if pvc.Labels[k] != v {
+				selectorPass = false
+			}
+		}
+
+		if !selectorPass {
+			continue
+		}
+
 		podList, err := a.GetPodsInfoByPVC(pods, pvc.Name)
 		if err != nil {
 			return vols, err
